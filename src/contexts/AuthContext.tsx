@@ -13,33 +13,72 @@ export function formatAuthError(err: any): string {
   const msg = typeof err === "string" ? err : err.message || "";
   const lower = msg.toLowerCase();
 
-  if (lower.includes("invalid login credentials") || lower.includes("invalid_grant")) {
+  if (
+    lower.includes("supabase client not configured") ||
+    lower.includes("configuration not found") ||
+    lower.includes("not configured")
+  ) {
+    return "Authentication is temporarily unavailable.";
+  }
+  if (
+    lower.includes("invalid login credentials") ||
+    lower.includes("invalid_grant") ||
+    lower.includes("invalid username or password")
+  ) {
     return "Incorrect email or password.";
   }
-  if (lower.includes("email not confirmed") || lower.includes("email address not verified") || lower.includes("unconfirmed")) {
+  if (
+    lower.includes("email not confirmed") ||
+    lower.includes("email address not verified") ||
+    lower.includes("unconfirmed")
+  ) {
     return "Please verify your email before signing in.";
   }
-  if (lower.includes("user already registered") || lower.includes("already registered") || lower.includes("already exists")) {
+  if (
+    lower.includes("user already registered") ||
+    lower.includes("already registered") ||
+    lower.includes("already exists")
+  ) {
     return "An account with this email already exists using password authentication. Sign in with your password first, then connect Google from your account settings.";
   }
-  if (lower.includes("provider is not enabled") || lower.includes("unsupported provider") || lower.includes("oauth error")) {
-    return "Google sign-in is temporarily unavailable. Please try again later.";
+  if (
+    lower.includes("provider is not enabled") ||
+    lower.includes("unsupported provider") ||
+    lower.includes("oauth error") ||
+    lower.includes("google")
+  ) {
+    return "Google sign-in is temporarily unavailable. Please try again.";
   }
-  if (lower.includes("fetch failed") || lower.includes("network") || lower.includes("failed to fetch") || lower.includes("connection refused")) {
+  if (
+    lower.includes("fetch failed") ||
+    lower.includes("network") ||
+    lower.includes("failed to fetch") ||
+    lower.includes("connection refused")
+  ) {
     return "Unable to connect. Check your internet connection and try again.";
   }
-  if (lower.includes("password should be at least 6 characters") || lower.includes("weak_password")) {
+  if (
+    lower.includes("password should be at least 6 characters") ||
+    lower.includes("weak_password")
+  ) {
     return "Password must be at least 6 characters long.";
   }
-  if (lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("only request this once")) {
-    return "Too many attempts. For security purposes, please wait a moment before trying again.";
+  if (
+    lower.includes("rate limit") ||
+    lower.includes("too many requests") ||
+    lower.includes("over_email_send_rate_limit") ||
+    lower.includes("only request this once")
+  ) {
+    return "Too many attempts. Please wait a moment and try again.";
   }
-  if (lower.includes("link has expired") || lower.includes("token has expired") || lower.includes("otp_expired")) {
+  if (
+    lower.includes("link has expired") ||
+    lower.includes("token has expired") ||
+    lower.includes("otp_expired")
+  ) {
     return "This link has expired or has already been used. Please request a fresh one.";
   }
-  // Remove technical stack tokens if any
-  const cleaned = msg.replace(/^[A-Za-z0-9_-]+:\s*/, "").trim();
-  return cleaned || "Authentication request failed. Please try again.";
+  return "Authentication request failed. Please try again.";
 }
 
 interface AuthContextType {
@@ -216,7 +255,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       if (!isSupabaseConfigured()) {
-        return { error: "Supabase client not configured in environment." };
+        console.error("Supabase client not configured in environment. VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing.");
+        return { error: "Authentication is temporarily unavailable." };
       }
 
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -279,7 +319,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       if (!isSupabaseConfigured()) {
-        return { error: "Supabase client not configured in environment." };
+        console.error("Supabase client not configured in environment. VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing.");
+        return { error: "Authentication is temporarily unavailable." };
       }
 
       const { data, error } = await supabase.auth.signUp({
@@ -341,7 +382,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   const signInWithGoogle = async (intendedRole: UserRole = "student"): Promise<{ error?: string }> => {
     if (!isSupabaseConfigured()) {
-      return { error: "Supabase configuration not found." };
+      console.error("Supabase client not configured in environment. VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing.");
+      return { error: "Google sign-in is temporarily unavailable. Please try again." };
     }
 
     try {
@@ -370,7 +412,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   const linkGoogleAccount = async (): Promise<{ error?: string }> => {
     if (!isSupabaseConfigured()) {
-      return { error: "Supabase configuration not found." };
+      console.error("Supabase client not configured in environment. VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing.");
+      return { error: "Google sign-in is temporarily unavailable. Please try again." };
     }
 
     try {
@@ -396,7 +439,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   const resetPasswordForEmail = async (email: string): Promise<{ error?: string }> => {
     if (!isSupabaseConfigured()) {
-      return { error: "Supabase client not configured in environment." };
+      console.error("Supabase client not configured in environment. VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing.");
+      return { error: "Authentication is temporarily unavailable." };
     }
 
     try {
@@ -418,7 +462,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   const updatePassword = async (newPassword: string): Promise<{ error?: string }> => {
     if (!isSupabaseConfigured()) {
-      return { error: "Supabase client not configured in environment." };
+      console.error("Supabase client not configured in environment. VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing.");
+      return { error: "Authentication is temporarily unavailable." };
     }
 
     try {
@@ -440,7 +485,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    */
   const resendVerificationEmail = async (email: string): Promise<{ error?: string }> => {
     if (!isSupabaseConfigured()) {
-      return { error: "Supabase client not configured in environment." };
+      console.error("Supabase client not configured in environment. VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing.");
+      return { error: "Authentication is temporarily unavailable." };
     }
 
     try {

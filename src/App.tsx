@@ -191,8 +191,8 @@ function ProtectedRoute({
     );
   }
 
-  // Redirect unauthenticated user to login when Supabase is configured
-  if (isSupabaseConfigured() && !user) {
+  // Redirect unauthenticated user to login
+  if (!user) {
     return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   }
 
