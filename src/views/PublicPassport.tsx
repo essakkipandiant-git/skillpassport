@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Copy, Download, Flag, Mail, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Copy, Download, ExternalLink, Flag, Mail, ShieldCheck } from "lucide-react";
 import { Avatar, Button, Chip, CommitGrid, Ring, VerifyBadge, useToast, Skeleton, EmptyState } from "../lib/ui";
 import type { FullPassportData } from "../lib/types";
 import * as api from "../lib/api";
@@ -90,7 +90,7 @@ export function PassportBody({
     );
   }
 
-  const { profile, readiness, skills, projects, experience, certifications, codingProfiles } = data;
+  const { profile, readiness, skills, projects, evidence, experience, certifications, codingProfiles } = data;
   const groups = Array.from(new Set(skills.map((s) => s.category)));
   const totalCommits = skills.reduce((a, s) => a + (s.commits || 0), 0);
 
@@ -228,7 +228,13 @@ export function PassportBody({
                 <div className="flex flex-1 flex-col p-5">
                   <div className="flex items-start justify-between gap-2">
                     <h3 className="font-display text-[15.5px] font-semibold text-ink">{p.name}</h3>
-                    <VerifyBadge state={p.state} short detail={`Repo ${p.repo || "linked"} · ${p.commits} commits · ★ ${p.stars}`} />
+                    <VerifyBadge
+                      state={p.state}
+                      short
+                      detail={p.state === "verified"
+                        ? `Repository ownership verified (${p.repo || "GitHub"}). Note: Validates repository ownership and provenance, not standalone coding proficiency.`
+                        : `Repo ${p.repo || "linked"} · ${p.commits} commits · ★ ${p.stars}`}
+                    />
                   </div>
                   <p className="mt-1.5 flex-1 text-[12.5px] leading-relaxed text-ink-2">{p.tagline}</p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
@@ -240,6 +246,39 @@ export function PassportBody({
             ))}
           </div>
         </Section>
+
+        {/* Evidence Vault */}
+        {evidence && evidence.length > 0 && (
+          <Section label={`Evidence Vault · ${evidence.length}`}>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {evidence.map((ev) => (
+                <div key={ev.id} className="rounded-[10px] border border-line bg-surface p-4 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="font-display text-[14px] font-semibold text-ink truncate">{ev.title}</span>
+                      <VerifyBadge
+                        state={ev.verification_state}
+                        short
+                        detail={ev.verification_state === "verified"
+                          ? "Repository ownership verified via GitHub OAuth. Validates authentic identity and repository provenance (does not certify standalone coding skill)."
+                          : "Connected external reference."}
+                      />
+                    </div>
+                    {ev.description && <p className="mt-1.5 text-[12px] text-ink-2 line-clamp-2 leading-relaxed">{ev.description}</p>}
+                  </div>
+                  <div className="mt-3 flex items-center justify-between border-t border-line/60 pt-2.5 font-mono text-[10.5px] text-ink-4">
+                    <span className="uppercase tracking-wider">{ev.type.replace("_", " ")}</span>
+                    {ev.url && (
+                      <a href={ev.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue hover:text-cyan transition-colors">
+                        View artifact <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
 
         {/* 6 — Experience */}
         {experience.length > 0 && (

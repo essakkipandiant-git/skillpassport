@@ -258,6 +258,7 @@ export interface GitHubRepo {
   name: string;
   full_name: string;
   owner: string;
+  owner_id?: number;
   html_url: string;
   description: string | null;
   language: string | null;

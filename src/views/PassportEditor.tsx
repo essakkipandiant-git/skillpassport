@@ -276,6 +276,78 @@ export default function PassportEditor({ go, tab = "overview" }: { go: Go; tab?:
     }
   };
 
+  // Detect and handle GitHub OAuth callback
+  useEffect(() => {
+    if (!profile) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("oauth") === "github") {
+      // Clean up URL parameter cleanly
+      const cleanUrl = window.location.pathname + (window.location.hash || "");
+      window.history.replaceState({}, document.title, cleanUrl);
+
+      async function processOAuthCallback() {
+        setGhLoading(true);
+        try {
+          const res = await api.handleGitHubOAuthCallback(profile!.id);
+          if (res.error) {
+            toast(res.error, "warn");
+          } else if (res.identity) {
+            setConnectedGh(res.identity);
+            setGhUsername(res.identity.username);
+            const repos = await api.fetchGitHubRepos(res.identity.username);
+            setGhRepos(repos);
+            toast(`GitHub account linked via OAuth: @${res.identity.username}`, "success");
+            setDrawer("github");
+          }
+        } catch (err: any) {
+          toast(err.message || "Failed to process GitHub OAuth callback", "warn");
+        } finally {
+          setGhLoading(false);
+        }
+      }
+      processOAuthCallback();
+    }
+  }, [profile?.id]);
+
+  const handleInitiateGitHubOAuth = async () => {
+    setGhLoading(true);
+    try {
+      const res = await api.initiateGitHubOAuth();
+      if (res.error) {
+        toast(res.error, "warn");
+      }
+    } catch (err: any) {
+      toast(err.message || "Failed to start GitHub OAuth", "warn");
+    } finally {
+      setGhLoading(false);
+    }
+  };
+
+  const handleDisconnectGitHub = async () => {
+    if (!profile) return;
+    if (!window.confirm("Disconnect GitHub account? Active verified repository ownership will transition to connected references, while preserving audit provenance.")) return;
+    setGhLoading(true);
+    try {
+      await api.disconnectGitHub(profile.id);
+      setConnectedGh(null);
+      setGhRepos([]);
+      // Reload evidence, projects, and verification history to reflect transition
+      const [evList, projList, hist] = await Promise.all([
+        api.getEvidence(profile.id),
+        api.getProjects(profile.id),
+        api.getVerificationHistory(profile.id),
+      ]);
+      setEvidenceList(evList);
+      setProjects(projList);
+      setVerHistory(hist);
+      toast("GitHub identity disconnected. Verified repository ownership transitioned to connected references.");
+    } catch (err: any) {
+      toast(err.message || "Failed to disconnect GitHub", "warn");
+    } finally {
+      setGhLoading(false);
+    }
+  };
+
   const handleConnectGitHub = async (usernameToFetch?: string) => {
     if (!profile) return;
     const targetUser = (usernameToFetch || ghUsername).trim().replace(/^@/, "");
@@ -285,11 +357,11 @@ export default function PassportEditor({ go, tab = "overview" }: { go: Go; tab?:
     }
     setGhLoading(true);
     try {
-      const identity = await api.connectGitHub(profile.id, targetUser);
+      const identity = await api.connectGitHub(profile.id, targetUser, { auth_method: "public_handle" });
       setConnectedGh(identity);
       const repos = await api.fetchGitHubRepos(targetUser);
       setGhRepos(repos);
-      toast(`GitHub connected as @${targetUser}. Retrieved ${repos.length} repositories.`);
+      toast(`GitHub synced as @${targetUser} (public handle mode). Retrieved ${repos.length} repositories.`);
     } catch (err: any) {
       toast(err.message || "Failed to connect GitHub", "warn");
     } finally {
@@ -334,7 +406,7 @@ export default function PassportEditor({ go, tab = "overview" }: { go: Go; tab?:
 
       toast(
         isVerified
-          ? `Verified! Repository ownership confirmed for ${repo.name}`
+          ? `Verified! Repository ownership confirmed for ${repo.name} (Validates ownership, not programming proficiency)`
           : `Repository ${repo.name} attached as connected evidence`,
         "success"
       );
@@ -973,23 +1045,77 @@ export default function PassportEditor({ go, tab = "overview" }: { go: Go; tab?:
       {/* GitHub Integration Drawer (Sprint 2) */}
       <Drawer open={drawer === "github"} onClose={() => setDrawer(null)} title="GitHub Repository Evidence">
         <div className="space-y-4">
-          <div className="rounded-lg border border-line bg-raised/50 p-3.5">
-            <p className="text-[12.5px] font-medium text-ink">Connected GitHub Account</p>
-            <div className="mt-2 flex items-center gap-2">
-              <input
-                className="field h-9 font-mono text-[13px] flex-1"
-                value={ghUsername}
-                onChange={(e) => setGhUsername(e.target.value)}
-                placeholder="github-username"
-              />
-              <Button size="sm" onClick={() => handleConnectGitHub(ghUsername)} disabled={ghLoading}>
-                {ghLoading ? "Syncing…" : "Fetch Repos"}
-              </Button>
+          <div className="rounded-lg border border-line bg-raised/50 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-[12.5px] font-medium text-ink">GitHub Authorization</p>
+              {connectedGh && (
+                <span className={cx(
+                  "rounded px-2 py-0.5 text-[10px] font-mono",
+                  connectedGh.metadata?.auth_method === "oauth"
+                    ? "bg-emerald/10 text-emerald border border-emerald/20"
+                    : "bg-amber/10 text-amber border border-amber/20"
+                )}>
+                  {connectedGh.metadata?.auth_method === "oauth" ? "OAuth Verified" : "Public Sync"}
+                </span>
+              )}
             </div>
-            {connectedGh && (
-              <p className="mt-2 text-[11.5px] text-emerald flex items-center gap-1.5">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Identity linked: @{connectedGh.username}
-              </p>
+
+            {connectedGh ? (
+              <div className="mt-3 flex items-center justify-between rounded-lg border border-line bg-surface p-3">
+                <div className="flex items-center gap-2.5">
+                  {connectedGh.avatar_url ? (
+                    <img src={connectedGh.avatar_url} alt={connectedGh.username} className="h-8 w-8 rounded-full border border-line" />
+                  ) : (
+                    <GitBranch className="h-5 w-5 text-ink-3" />
+                  )}
+                  <div>
+                    <p className="font-display text-[13px] font-medium text-ink">@{connectedGh.username}</p>
+                    <p className="text-[11px] text-ink-4 font-mono">
+                      {connectedGh.metadata?.auth_method === "oauth" ? "Identity confirmed via OAuth" : "Public handle lookup"}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleDisconnectGitHub}
+                  disabled={ghLoading}
+                  className="text-rose hover:bg-rose/10 hover:text-rose text-[11px]"
+                >
+                  Disconnect
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-3 space-y-3">
+                <Button
+                  className="w-full flex items-center justify-center gap-2"
+                  onClick={handleInitiateGitHubOAuth}
+                  disabled={ghLoading}
+                >
+                  <GitBranch className="h-4 w-4" />
+                  {ghLoading ? "Redirecting…" : "Connect with GitHub (OAuth 2.0)"}
+                </Button>
+                <p className="text-[11px] text-ink-4 text-center leading-relaxed">
+                  Cryptographically proves account ownership to earn Verified Repository status.
+                </p>
+
+                <div className="relative my-2 text-center">
+                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-line/60" /></div>
+                  <span className="relative bg-raised px-2 font-mono text-[10px] uppercase text-ink-4">or sync public handle</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    className="field h-9 font-mono text-[13px] flex-1"
+                    value={ghUsername}
+                    onChange={(e) => setGhUsername(e.target.value)}
+                    placeholder="github-username"
+                  />
+                  <Button size="sm" variant="secondary" onClick={() => handleConnectGitHub(ghUsername)} disabled={ghLoading}>
+                    {ghLoading ? "Syncing…" : "Fetch Repos"}
+                  </Button>
+                </div>
+              </div>
             )}
           </div>
 
@@ -999,22 +1125,30 @@ export default function PassportEditor({ go, tab = "overview" }: { go: Go; tab?:
             </p>
             {ghRepos.length === 0 ? (
               <p className="text-[12.5px] text-ink-4 py-4 text-center">
-                Enter your username above and click Fetch Repos to browse repositories.
+                {connectedGh ? "Click Fetch Repos above to load repositories." : "Connect your GitHub account above to browse and attach repositories."}
               </p>
             ) : (
               <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
                 {ghRepos.map((r) => {
+                  const isOAuth = Boolean(connectedGh?.metadata?.auth_method === "oauth");
                   const isOwner = Boolean(
                     connectedGh?.username &&
                     r.owner &&
                     connectedGh.username.toLowerCase() === r.owner.toLowerCase()
                   );
+                  const isVerifiedEligible = isOAuth && isOwner;
+
                   return (
                     <div key={r.id} className="rounded-lg border border-line bg-surface p-3.5 transition-colors hover:border-line-strong">
                       <div className="flex items-start justify-between gap-2">
                         <span className="font-display text-[13.5px] font-semibold text-ink truncate">{r.name}</span>
-                        <span className={cx("rounded px-1.5 py-0.5 text-[10px] font-mono", isOwner ? "bg-emerald/10 text-emerald border border-emerald/20" : "bg-cyan/10 text-cyan border border-cyan/20")}>
-                          {isOwner ? "Verified Owner" : "Connected Ref"}
+                        <span className={cx(
+                          "rounded px-1.5 py-0.5 text-[10px] font-mono",
+                          isVerifiedEligible
+                            ? "bg-emerald/10 text-emerald border border-emerald/20"
+                            : "bg-cyan/10 text-cyan border border-cyan/20"
+                        )}>
+                          {isVerifiedEligible ? "Verified Owner" : isOwner ? "Connected Owner" : "Connected Ref"}
                         </span>
                       </div>
                       {r.description && <p className="mt-1 text-[11.5px] text-ink-3 line-clamp-2 leading-relaxed">{r.description}</p>}
@@ -1022,6 +1156,7 @@ export default function PassportEditor({ go, tab = "overview" }: { go: Go; tab?:
                         {r.language && <span>{r.language}</span>}
                         <span>★ {r.stargazers_count}</span>
                         <span>{r.default_branch}</span>
+                        <span className="ml-auto text-[10px] text-ink-4">owner: {r.owner}</span>
                       </div>
                       <div className="mt-3 flex items-center gap-2 border-t border-line/40 pt-2.5">
                         <select
@@ -1050,9 +1185,12 @@ export default function PassportEditor({ go, tab = "overview" }: { go: Go; tab?:
       {/* Verification Audit History Drawer (Sprint 2) */}
       <Drawer open={drawer === "history"} onClose={() => setDrawer(null)} title="Verification Audit Trail">
         <div className="space-y-4">
-          <p className="text-[12.5px] text-ink-3 leading-relaxed">
-            Immutable log of verification events, methods, and rule evaluations recorded for your evidence claims.
-          </p>
+          <div className="rounded-lg border border-line bg-raised/40 p-3 text-[11.5px] text-ink-3 leading-relaxed">
+            <p className="font-medium text-ink flex items-center gap-1.5 mb-1">
+              <ShieldCheck className="h-4 w-4 text-emerald" /> Cryptographic Provenance Model
+            </p>
+            Immutable event log tracking verification evaluations, transition rules, and authenticity claims. Repository ownership validates identity provenance and authentic commit author history, not standalone coding proficiency.
+          </div>
 
           {verHistory.length === 0 ? (
             <div className="py-8 text-center text-[12.5px] text-ink-4">
@@ -1063,22 +1201,39 @@ export default function PassportEditor({ go, tab = "overview" }: { go: Go; tab?:
               {verHistory.map((v) => (
                 <div key={v.id} className="rounded-lg border border-line bg-surface p-3.5">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-[11.5px] text-ink font-medium">{v.verification_method}</span>
-                    <span className={cx("rounded px-1.5 py-0.5 text-[10px] font-mono uppercase", v.result === "success" ? "bg-emerald/10 text-emerald" : "bg-rose/10 text-rose")}>
+                    <span className="font-mono text-[11.5px] text-ink font-medium">
+                      {v.verification_method === "repo_ownership_verified"
+                        ? "Repository Ownership Verification"
+                        : v.verification_method === "repo_external_connected"
+                        ? "External Repository Link"
+                        : v.verification_method === "disconnect_github_identity"
+                        ? "Identity Disconnection Transition"
+                        : v.verification_method}
+                    </span>
+                    <span className={cx(
+                      "rounded px-1.5 py-0.5 text-[10px] font-mono uppercase",
+                      v.result === "success" ? "bg-emerald/10 text-emerald" : "bg-rose/10 text-rose"
+                    )}>
                       {v.result}
                     </span>
                   </div>
+
                   <div className="mt-2 flex items-center gap-2 font-mono text-[11px] text-ink-4">
                     <span>Source: {v.verification_source}</span>
                     <span>·</span>
-                    <span>{v.previous_state} → {v.new_state}</span>
+                    <span className="capitalize">{v.previous_state} → {v.new_state}</span>
                   </div>
+
                   {v.details && (
-                    <div className="mt-2 rounded bg-raised/70 p-2 font-mono text-[10.5px] text-ink-3">
-                      {v.details.repo && <p>Repo: {v.details.repo}</p>}
-                      {v.details.rule_applied && <p className="mt-0.5 text-ink-2">{v.details.rule_applied}</p>}
+                    <div className="mt-2 rounded bg-raised/70 p-2 font-mono text-[10.5px] text-ink-3 space-y-1">
+                      {v.details.repo_name && <p><span className="text-ink-4">Repository:</span> {v.details.repo_name}</p>}
+                      {v.details.repo && <p><span className="text-ink-4">Repository:</span> {v.details.repo}</p>}
+                      {v.details.repo_owner && <p><span className="text-ink-4">Owner:</span> {v.details.repo_owner}</p>}
+                      {v.details.rule_applied && <p className="text-ink-2"><span className="text-ink-4">Rule:</span> {v.details.rule_applied}</p>}
+                      {v.details.reason && <p className="text-amber"><span className="text-ink-4">Note:</span> {v.details.reason}</p>}
                     </div>
                   )}
+
                   <p className="mt-2 text-[10px] text-ink-4 font-mono">
                     {new Date(v.created_at).toLocaleString()}
                   </p>
