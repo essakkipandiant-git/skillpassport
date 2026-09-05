@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowRight, Briefcase, Check, Github, GraduationCap, Linkedin, Code2, Sparkles } from "lucide-react";
+import { ArrowRight, Briefcase, Check, CheckCircle2, Github, GraduationCap, Linkedin, Code2, Sparkles, Mail, Lock, ShieldAlert } from "lucide-react";
 import { Avatar, Button, Chip, EASE, Logo, cx, useToast } from "../lib/ui";
 import { SKILL_ONTOLOGY } from "../lib/data";
 import { useAuth } from "../contexts/AuthContext";
@@ -19,37 +19,116 @@ function GoogleIcon() {
   );
 }
 
-/* ---------------- Sign in / up ---------------- */
+/* ---------------- Sign in / up / recovery ---------------- */
 export function SignIn({ go, signup = false }: { go: Go; signup?: boolean }) {
   const toast = useToast();
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, signInWithGoogle, resetPasswordForEmail, resendVerificationEmail } = useAuth();
   const [mode, setMode] = useState<"student" | "recruiter">("student");
   const [isSignup, setIsSignup] = useState(signup);
+  const [view, setView] = useState<"auth" | "forgot_password" | "verify_email">("auth");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [forgotEmail, setForgotEmail] = useState("");
   const [err, setErr] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+  const [resendStatus, setResendStatus] = useState<string | null>(null);
 
   const submit = async () => {
     if (!email.includes("@")) { setErr("Enter a valid email address"); return; }
     if (pw.length < 6) { setErr("Password must be at least 6 characters"); return; }
+    if (isSignup && pw !== confirmPw) {
+      setErr("Passwords do not match");
+      return;
+    }
+
     setErr("");
     setSubmitting(true);
     try {
-      const res = isSignup
-        ? await signUp(email, pw, mode)
-        : await signIn(email, pw, mode);
-
-      if (res.error) {
-        setErr(res.error);
-        return;
+      if (isSignup) {
+        const res = await signUp(email, pw, mode);
+        if (res.error) {
+          setErr(res.error);
+          return;
+        }
+        if (res.unverified) {
+          setView("verify_email");
+          toast("Check your email to verify your account", "info");
+          return;
+        }
+        toast(`Account created — welcome to SkillPassport`);
+        go(mode === "student" ? "app-dashboard" : "rec-home");
+      } else {
+        const res = await signIn(email, pw);
+        if (res.error) {
+          if (res.unverified) {
+            setView("verify_email");
+          }
+          setErr(res.error);
+          return;
+        }
+        toast(`Welcome back — signed in as ${mode}`);
+        go(mode === "student" ? "app-dashboard" : "rec-home");
       }
-      toast(isSignup ? `Account created — welcome to SkillPassport` : `Welcome back — signed in as ${mode}`);
-      go(mode === "student" ? "app-dashboard" : "rec-home");
     } catch (e: any) {
       setErr(e.message || "Authentication failed");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleGoogleAuth = async () => {
+    setErr("");
+    setSubmitting(true);
+    try {
+      const res = await signInWithGoogle(mode);
+      if (res.error) {
+        setErr(res.error);
+      }
+    } catch (e: any) {
+      setErr(e.message || "Failed to start Google authentication");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!forgotEmail.includes("@")) {
+      setErr("Enter a valid email address");
+      return;
+    }
+    setErr("");
+    setSubmitting(true);
+    try {
+      const res = await resetPasswordForEmail(forgotEmail);
+      if (res.error) {
+        setErr(res.error);
+        return;
+      }
+      setResetSent(true);
+      toast("Password reset instructions sent to your email", "success");
+    } catch (e: any) {
+      setErr(e.message || "Failed to send reset link");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    const targetEmail = email || forgotEmail;
+    if (!targetEmail) return;
+    setResendStatus("Sending fresh verification link…");
+    try {
+      const res = await resendVerificationEmail(targetEmail);
+      if (res.error) {
+        setResendStatus(res.error);
+      } else {
+        setResendStatus("Verification email sent! Check your inbox.");
+        toast("Verification link sent", "success");
+      }
+    } catch (e: any) {
+      setResendStatus(e.message || "Failed to resend verification email");
     }
   };
 
@@ -87,60 +166,210 @@ export function SignIn({ go, signup = false }: { go: Go; signup?: boolean }) {
       <div className="flex items-center justify-center px-6 py-16">
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: EASE }} className="w-full max-w-sm">
           <div className="mb-8 lg:hidden"><Logo /></div>
-          <h1 className="font-display text-[26px] font-semibold tracking-[-0.015em] text-ink">{isSignup ? "Create your passport" : "Sign in to SkillPassport"}</h1>
-          <p className="mt-2 text-[14px] text-ink-2">{isSignup ? "Free for students. Verified in under ten minutes." : "Pick up where your proof left off."}</p>
 
-          <div className="mt-7 space-y-2.5">
-            <Button variant="secondary" className="w-full" onClick={() => toast("Google SSO is connected via OAuth partner", "info")}>
-              <GoogleIcon /> Continue with Google
-            </Button>
-            <Button variant="secondary" className="w-full" onClick={() => toast("College partner SSO: PES, IIIT-B, NIT-K and 337 campuses", "info")}>
-              <GraduationCap className="h-4 w-4 text-cyan" /> Continue with College SSO
-            </Button>
-          </div>
+          {/* VIEW A: Email Verification Pending Notice */}
+          {view === "verify_email" ? (
+            <div className="space-y-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full border border-blue/30 bg-blue/10 text-blue">
+                <Mail className="h-6 w-6" />
+              </div>
+              <h1 className="font-display text-[24px] font-semibold tracking-[-0.015em] text-ink">
+                Verify your email
+              </h1>
+              <p className="text-[13.5px] text-ink-2 leading-relaxed">
+                We sent a verification link to <span className="font-semibold text-ink">{email}</span>. Click the link in the email to activate your SkillPassport.
+              </p>
 
-          <div className="my-6 flex items-center gap-3">
-            <span className="h-px flex-1 bg-line" />
-            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-ink-4">or continue with email</span>
-            <span className="h-px flex-1 bg-line" />
-          </div>
+              {resendStatus && (
+                <p className="rounded-lg border border-line bg-raised/50 p-2.5 text-[12px] text-ink-2 font-mono">
+                  {resendStatus}
+                </p>
+              )}
 
-          <div className="space-y-3.5">
-            <label className="block">
-              <span className="mb-1.5 block text-[12.5px] font-medium text-ink-2">Email</span>
-              <input className="field h-10" type="email" placeholder="you@college.edu" value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); }} />
-            </label>
-            <label className="block">
-              <span className="mb-1.5 block text-[12.5px] font-medium text-ink-2">Password</span>
-              <input className="field h-10" type="password" placeholder="••••••••" value={pw} onChange={(e) => { setPw(e.target.value); setErr(""); }} onKeyDown={(e) => e.key === "Enter" && submit()} />
-            </label>
-            {err && <p className="text-[12px] text-rose">{err}</p>}
-            <Button className="w-full" size="lg" onClick={submit} disabled={submitting}>
-              {submitting ? "Processing…" : isSignup ? "Create account" : "Sign in"} <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
-
-          <p className="mt-5 text-center text-[13px] text-ink-3">
-            {isSignup ? "Already have one?" : "Don't have an account?"}{" "}
-            <button onClick={() => setIsSignup(!isSignup)} className="font-medium text-blue transition-colors hover:text-cyan">{isSignup ? "Sign in" : "Sign up"}</button>
-          </p>
-
-          <div className="mt-7 rounded-lg border border-line bg-surface p-3.5">
-            <p className="text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-4">I'm joining as a</p>
-            <div className="mt-2.5 grid grid-cols-2 gap-2">
-              {(["student", "recruiter"] as const).map((r) => (
-                <button key={r} onClick={() => setMode(r)} className={cx("flex items-center justify-center gap-2 rounded-lg border py-2.5 text-[13px] font-medium transition-all duration-150 active:scale-[0.98]", mode === r ? "border-blue/50 bg-blue/10 text-blue" : "border-line text-ink-3 hover:border-line-strong hover:text-ink")}>
-                  {r === "student" ? <GraduationCap className="h-4 w-4" /> : <Briefcase className="h-4 w-4" />}
-                  {r === "student" ? "Student" : "Recruiter"}
-                  {mode === r && <Check className="h-3.5 w-3.5" />}
-                </button>
-              ))}
+              <div className="space-y-2 pt-2">
+                <Button variant="secondary" className="w-full" onClick={handleResendVerification}>
+                  Resend verification email
+                </Button>
+                <Button variant="ghost" className="w-full" onClick={() => { setView("auth"); setIsSignup(false); }}>
+                  Back to sign in
+                </Button>
+              </div>
             </div>
-          </div>
+          ) : view === "forgot_password" ? (
+            /* VIEW B: Password Recovery Request */
+            <div className="space-y-4">
+              <h1 className="font-display text-[24px] font-semibold tracking-[-0.015em] text-ink">
+                Reset your password
+              </h1>
+              <p className="text-[13.5px] text-ink-2 leading-relaxed">
+                Enter your account email and we'll send you instructions to set a new password.
+              </p>
 
-          <p className="mt-6 text-center text-[11px] leading-relaxed text-ink-4">
-            By continuing, you agree to our <span className="text-ink-3">Terms</span> & <span className="text-ink-3">Privacy Policy</span>.
-          </p>
+              {resetSent ? (
+                <div className="rounded-lg border border-emerald/30 bg-emerald/10 p-4 space-y-2 text-center">
+                  <CheckCircle2 className="mx-auto h-7 w-7 text-emerald" />
+                  <p className="text-[13px] font-medium text-ink">Check your inbox</p>
+                  <p className="text-[12px] text-ink-2">
+                    We sent password recovery instructions to <span className="text-ink font-semibold">{forgotEmail}</span>.
+                  </p>
+                  <Button variant="secondary" size="sm" className="w-full mt-3" onClick={() => { setView("auth"); setResetSent(false); }}>
+                    Back to sign in
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3.5 pt-2">
+                  <label className="block">
+                    <span className="mb-1.5 block text-[12.5px] font-medium text-ink-2">Email address</span>
+                    <input
+                      className="field h-10"
+                      type="email"
+                      placeholder="you@college.edu"
+                      value={forgotEmail}
+                      onChange={(e) => { setForgotEmail(e.target.value); setErr(""); }}
+                      onKeyDown={(e) => e.key === "Enter" && handleForgotPassword()}
+                    />
+                  </label>
+
+                  {err && <p className="text-[12px] text-rose">{err}</p>}
+
+                  <Button className="w-full" size="lg" onClick={handleForgotPassword} disabled={submitting}>
+                    {submitting ? "Sending reset link…" : "Send Reset Link"} <ArrowRight className="h-4 w-4 ml-1.5" />
+                  </Button>
+
+                  <button
+                    onClick={() => { setView("auth"); setErr(""); }}
+                    className="w-full text-center text-[12.5px] text-ink-3 transition-colors hover:text-ink pt-1"
+                  >
+                    Back to sign in
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* VIEW C: Main Sign in / Sign up Form */
+            <>
+              <h1 className="font-display text-[26px] font-semibold tracking-[-0.015em] text-ink">
+                {isSignup ? "Create your passport" : "Sign in to SkillPassport"}
+              </h1>
+              <p className="mt-2 text-[14px] text-ink-2">
+                {isSignup ? "Free for students. Verified in under ten minutes." : "Pick up where your proof left off."}
+              </p>
+
+              <div className="mt-7 space-y-2.5">
+                <Button
+                  variant="secondary"
+                  className="w-full flex items-center justify-center gap-2"
+                  onClick={handleGoogleAuth}
+                  disabled={submitting}
+                >
+                  <GoogleIcon /> Continue with Google
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  onClick={() => toast("Campus SSO: PES, IIIT-B, NIT-K and 337 campuses supported via institutional registry", "info")}
+                >
+                  <GraduationCap className="h-4 w-4 text-cyan" /> Continue with College SSO
+                </Button>
+              </div>
+
+              <div className="my-6 flex items-center gap-3">
+                <span className="h-px flex-1 bg-line" />
+                <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-ink-4">or continue with email</span>
+                <span className="h-px flex-1 bg-line" />
+              </div>
+
+              <div className="space-y-3.5">
+                <label className="block">
+                  <span className="mb-1.5 block text-[12.5px] font-medium text-ink-2">Email</span>
+                  <input
+                    className="field h-10"
+                    type="email"
+                    placeholder="you@college.edu"
+                    value={email}
+                    onChange={(e) => { setEmail(e.target.value); setErr(""); }}
+                  />
+                </label>
+
+                <label className="block">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-[12.5px] font-medium text-ink-2">Password</span>
+                    {!isSignup && (
+                      <button
+                        type="button"
+                        onClick={() => { setView("forgot_password"); setForgotEmail(email); setErr(""); }}
+                        className="text-[11.5px] text-ink-3 transition-colors hover:text-blue"
+                      >
+                        Forgot password?
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    className="field h-10"
+                    type="password"
+                    placeholder="••••••••"
+                    value={pw}
+                    onChange={(e) => { setPw(e.target.value); setErr(""); }}
+                    onKeyDown={(e) => e.key === "Enter" && !isSignup && submit()}
+                  />
+                </label>
+
+                {isSignup && (
+                  <label className="block">
+                    <span className="mb-1.5 block text-[12.5px] font-medium text-ink-2">Confirm Password</span>
+                    <input
+                      className="field h-10"
+                      type="password"
+                      placeholder="••••••••"
+                      value={confirmPw}
+                      onChange={(e) => { setConfirmPw(e.target.value); setErr(""); }}
+                      onKeyDown={(e) => e.key === "Enter" && submit()}
+                    />
+                  </label>
+                )}
+
+                {err && <p className="text-[12px] text-rose leading-relaxed">{err}</p>}
+
+                <Button className="w-full" size="lg" onClick={submit} disabled={submitting}>
+                  {submitting ? "Processing…" : isSignup ? "Create account" : "Sign in"} <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <p className="mt-5 text-center text-[13px] text-ink-3">
+                {isSignup ? "Already have one?" : "Don't have an account?"}{" "}
+                <button
+                  onClick={() => { setIsSignup(!isSignup); setErr(""); }}
+                  className="font-medium text-blue transition-colors hover:text-cyan"
+                >
+                  {isSignup ? "Sign in" : "Sign up"}
+                </button>
+              </p>
+
+              <div className="mt-7 rounded-lg border border-line bg-surface p-3.5">
+                <p className="text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-4">I'm joining as a</p>
+                <div className="mt-2.5 grid grid-cols-2 gap-2">
+                  {(["student", "recruiter"] as const).map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setMode(r)}
+                      className={cx(
+                        "flex items-center justify-center gap-2 rounded-lg border py-2.5 text-[13px] font-medium transition-all duration-150 active:scale-[0.98]",
+                        mode === r ? "border-blue/50 bg-blue/10 text-blue" : "border-line text-ink-3 hover:border-line-strong hover:text-ink"
+                      )}
+                    >
+                      {r === "student" ? <GraduationCap className="h-4 w-4" /> : <Briefcase className="h-4 w-4" />}
+                      {r === "student" ? "Student" : "Recruiter"}
+                      {mode === r && <Check className="h-3.5 w-3.5" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <p className="mt-6 text-center text-[11px] leading-relaxed text-ink-4">
+                By continuing, you agree to our <span className="text-ink-3">Terms</span> & <span className="text-ink-3">Privacy Policy</span>.
+              </p>
+            </>
+          )}
         </motion.div>
       </div>
     </div>
@@ -156,7 +385,6 @@ const CONNECTS = [
 
 export function Onboarding({ go }: { go: Go }) {
   const toast = useToast();
-  const { signUp } = useAuth();
   const [step, setStep] = useState(0);
   const [role, setRole] = useState<"student" | "recruiter">("student");
   const [info, setInfo] = useState({ name: "", college: "", year: "2026", major: "Computer Science", email: "", password: "" });
@@ -178,6 +406,14 @@ export function Onboarding({ go }: { go: Go }) {
   const finish = async () => {
     setFinishing(true);
     try {
+      // Idempotently ensure profile exists with chosen role
+      await api.provisionUserProfile(
+        role,
+        info.name,
+        role === "student" ? info.college : undefined,
+        role === "recruiter" ? info.name : undefined
+      );
+
       if (role === "student") {
         const currentP = await api.getCurrentProfile();
         if (currentP) {

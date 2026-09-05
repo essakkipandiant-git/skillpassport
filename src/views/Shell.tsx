@@ -153,7 +153,7 @@ export default function Shell({
   role: "student" | "recruiter";
   children: ReactNode;
 }) {
-  const { user, studentProfile, signOut, switchRoleDemo } = useAuth();
+  const { user, studentProfile, signOut } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [q, setQ] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -249,33 +249,38 @@ export default function Shell({
             {menuOpen && (
               <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }} transition={{ duration: 0.15, ease: EASE }} className="absolute right-0 top-10 w-56 overflow-hidden rounded-[10px] border border-line bg-raised py-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.45)]">
                 <div className="border-b border-line px-3.5 pb-2.5 pt-1.5">
-                  <p className="text-[13px] font-medium text-ink">{displayName}</p>
-                  <p className="text-[11px] text-ink-3">{displayEmail}</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[13px] font-medium text-ink truncate">{displayName}</p>
+                    <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider bg-hover text-ink-3">
+                      {role}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-ink-3 truncate">{displayEmail}</p>
                 </div>
+                {role === "student" && (
+                  <button
+                    onClick={() => {
+                      go("app-public", studentProfile?.slug || "aarav-patel");
+                      setMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-ink-2 hover:bg-hover hover:text-ink"
+                  >
+                    <BookOpen className="h-3.5 w-3.5" /> View public passport
+                  </button>
+                )}
                 <button
                   onClick={() => {
-                    const nextRole = role === "recruiter" ? "student" : "recruiter";
-                    switchRoleDemo(nextRole);
-                    go(nextRole === "recruiter" ? "rec-home" : "app-dashboard");
+                    go("app-settings");
                     setMenuOpen(false);
                   }}
                   className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-ink-2 hover:bg-hover hover:text-ink"
                 >
-                  <ArrowLeftRight className="h-3.5 w-3.5" /> Switch to {role === "recruiter" ? "student" : "recruiter"} demo
-                </button>
-                <button
-                  onClick={() => {
-                    go("app-public", studentProfile?.slug || "aarav-patel");
-                    setMenuOpen(false);
-                  }}
-                  className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-ink-2 hover:bg-hover hover:text-ink"
-                >
-                  <BookOpen className="h-3.5 w-3.5" /> View public passport
+                  <Settings className="h-3.5 w-3.5" /> Settings
                 </button>
                 <button
                   onClick={async () => {
                     await signOut();
-                    go("login");
+                    go("signin");
                     setMenuOpen(false);
                   }}
                   className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] text-ink-2 hover:bg-hover hover:text-ink"

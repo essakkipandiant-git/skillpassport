@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from "../supabase";
 import { getLocalDb, saveLocalDb } from "./storage";
-import type { StudentProfile, FullPassportData } from "../types";
+import type { StudentProfile, FullPassportData, UserRole } from "../types";
 
 export async function getCurrentProfile(userId?: string): Promise<StudentProfile | null> {
   if (isSupabaseConfigured()) {
@@ -146,5 +146,59 @@ export async function getPublicPassport(slug: string): Promise<FullPassportData 
     certifications: db.certifications.filter((c) => c.student_id === profile.id),
     achievements: db.achievements.filter((a) => a.student_id === profile.id),
     codingProfiles: db.coding_profiles.filter((cp) => cp.student_id === profile.id),
+  };
+}
+
+/**
+ * Retrieves the authoritative user role from public.profiles table.
+ */
+export async function getUserRole(userId: string): Promise<UserRole | null> {
+  if (isSupabaseConfigured()) {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Failed to fetch user role from profiles:", error.message);
+      return null;
+    }
+    return (data?.role as UserRole) || null;
+  }
+  const db = getLocalDb();
+  return (localStorage.getItem("sp_role") as UserRole) || "student";
+}
+
+/**
+ * Idempotently provisions or confirms user profiles in PostgreSQL via SECURITY DEFINER function.
+ * CRITICAL RULE: If a user already exists, their existing role is preserved and never overwritten.
+ */
+export async function provisionUserProfile(
+  role: UserRole,
+  fullName?: string,
+  college?: string,
+  company?: string
+): Promise<{ user_id: string; email: string; role: UserRole; is_new_user: boolean }> {
+  if (isSupabaseConfigured()) {
+    const { data, error } = await supabase.rpc("provision_user_profile", {
+      p_role: role,
+      p_full_name: fullName || null,
+      p_college: college || null,
+      p_company: company || null,
+    });
+
+    if (error) {
+      console.warn("provision_user_profile RPC error:", error.message);
+      throw error;
+    }
+    return data;
+  }
+
+  return {
+    user_id: "local-user",
+    email: "student@local.dev",
+    role,
+    is_new_user: false,
   };
 }

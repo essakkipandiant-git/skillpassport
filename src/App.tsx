@@ -17,6 +17,8 @@ import Coach from "./views/Coach";
 import Resume from "./views/Resume";
 import { JobMatching, Settings } from "./views/Career";
 import { SignIn, Onboarding } from "./views/Auth";
+import ResetPassword from "./views/ResetPassword";
+import AuthCallback from "./views/AuthCallback";
 
 // Helper to convert legacy go(name, param) to real URLs
 export function useGo() {
@@ -31,6 +33,9 @@ export function useGo() {
         break;
       case "onboarding":
         navigate("/signup");
+        break;
+      case "reset-password":
+        navigate("/reset-password");
         break;
       case "app-dashboard":
         navigate("/dashboard");
@@ -250,6 +255,8 @@ function AppRoutes() {
         />
         <Route path="/login" element={<SignIn go={go} />} />
         <Route path="/signup" element={<Onboarding go={go} />} />
+        <Route path="/reset-password" element={<ResetPassword go={go} />} />
+        <Route path="/auth/callback" element={<AuthCallback go={go} />} />
         <Route path="/public/:slug" element={<PublicPassportRoute />} />
 
         {/* Student App Protected Routes */}

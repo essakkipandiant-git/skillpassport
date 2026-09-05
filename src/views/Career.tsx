@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { ArrowUpRight, Bookmark, Check, CreditCard, MapPin, Trash2, Zap } from "lucide-react";
 import { Avatar, Button, Chip, EASE, MiniRing, cx, useToast } from "../lib/ui";
 import { JOBS, ME } from "../lib/data";
+import { useAuth } from "../contexts/AuthContext";
 
 type Go = (route: string, param?: string) => void;
 
@@ -93,10 +94,16 @@ export function JobMatching({ go }: { go: Go }) {
 /* ---------------- Settings + Billing ---------------- */
 export function Settings({ go, billing = false }: { go: Go; billing?: boolean }) {
   const toast = useToast();
+  const { user, linkGoogleAccount } = useAuth();
+  const [linkingGoogle, setLinkingGoogle] = useState(false);
   const [profile, setProfile] = useState({ name: ME.name, email: ME.email, slug: ME.slug, public: true, showGpa: true });
   const [prefs, setPrefs] = useState({ recruiterViews: true, weeklyDigest: true, jobMatches: true });
   const [cycle, setCycle] = useState<"monthly" | "yearly">("yearly");
   const [confirming, setConfirming] = useState(false);
+
+  const hasGoogle =
+    user?.identities?.some((id) => id.provider === "google") ||
+    (user?.app_metadata?.providers as string[] | undefined)?.includes("google");
 
   const Sw = ({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) => (
     <button onClick={onClick} role="switch" aria-checked={on} aria-label={label} className={cx("relative h-5 w-9 shrink-0 rounded-full transition-colors duration-200", on ? "bg-blue" : "bg-hover")}>
@@ -206,6 +213,52 @@ export function Settings({ go, billing = false }: { go: Go; billing?: boolean })
               </Button>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="mt-5 rounded-[10px] border border-line bg-surface p-6">
+        <h2 className="font-display text-[16px] font-semibold text-ink">Connected Accounts</h2>
+        <p className="mt-1 text-[12px] text-ink-3">Manage external authentication providers attached to your account.</p>
+        <div className="mt-4 flex items-center justify-between gap-4 rounded-lg border border-line bg-raised p-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-line bg-surface">
+              <svg className="h-4 w-4" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z"/>
+                <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.35 24 12 24z"/>
+                <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.16 0 9.97 0 12s.45 3.84 1.25 5.42l4.03-3.15z"/>
+                <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+              </svg>
+            </div>
+            <div>
+              <p className="text-[13.5px] font-medium text-ink">Google Account</p>
+              <p className="text-[12px] text-ink-3">
+                {hasGoogle
+                  ? "Connected · You can sign in using Google or email & password."
+                  : "Not connected · Connect Google to enable 1-click login without creating a separate account."}
+              </p>
+            </div>
+          </div>
+          <div>
+            {hasGoogle ? (
+              <Chip tone="emerald"><Check className="h-3 w-3" /> Connected</Chip>
+            ) : (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={linkingGoogle}
+                onClick={async () => {
+                  setLinkingGoogle(true);
+                  const res = await linkGoogleAccount();
+                  if (res?.error) {
+                    toast(res.error, "warn");
+                    setLinkingGoogle(false);
+                  }
+                }}
+              >
+                {linkingGoogle ? "Connecting..." : "Connect Google"}
+              </Button>
+            )}
+          </div>
         </div>
       </section>
 

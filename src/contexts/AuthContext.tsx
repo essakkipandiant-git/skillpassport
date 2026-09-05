@@ -1,8 +1,43 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { supabase, isSupabaseConfigured } from "../lib/supabase";
-import { getCurrentProfile } from "../lib/api/profiles";
+import { getCurrentProfile, getUserRole, provisionUserProfile } from "../lib/api/profiles";
 import type { StudentProfile, RecruiterProfile, UserRole } from "../lib/types";
 import type { User, Session } from "@supabase/supabase-js";
+
+/**
+ * Sanitizes and maps raw authentication errors into human-readable, safe messages.
+ * Prevents internal PostgreSQL, JWT, or database schema details from leaking to users.
+ */
+export function formatAuthError(err: any): string {
+  if (!err) return "An unexpected error occurred.";
+  const msg = typeof err === "string" ? err : err.message || "";
+  const lower = msg.toLowerCase();
+
+  if (lower.includes("invalid login credentials") || lower.includes("invalid_grant")) {
+    return "Invalid email or password. Please double-check your credentials.";
+  }
+  if (lower.includes("email not confirmed") || lower.includes("email address not verified")) {
+    return "Your email address is not verified yet. Please check your inbox for the confirmation link or request a new one.";
+  }
+  if (lower.includes("user already registered") || lower.includes("already registered") || lower.includes("already exists")) {
+    return "An account with this email address already exists. Please sign in with your password, then link additional providers in account settings.";
+  }
+  if (lower.includes("password should be at least 6 characters") || lower.includes("weak_password")) {
+    return "Password must be at least 6 characters long.";
+  }
+  if (lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("only request this once")) {
+    return "Too many attempts. For security purposes, please wait a moment before trying again.";
+  }
+  if (lower.includes("fetch failed") || lower.includes("network") || lower.includes("failed to fetch")) {
+    return "Unable to connect to authentication servers. Please check your internet connection.";
+  }
+  if (lower.includes("link has expired") || lower.includes("token has expired") || lower.includes("otp_expired")) {
+    return "This link has expired or has already been used. Please request a fresh one.";
+  }
+  // Remove technical stack tokens if any
+  const cleaned = msg.replace(/^[A-Za-z0-9_-]+:\s*/, "").trim();
+  return cleaned || "Authentication request failed. Please try again.";
+}
 
 interface AuthContextType {
   user: User | null;
@@ -11,11 +46,16 @@ interface AuthContextType {
   recruiterProfile: RecruiterProfile | null;
   role: UserRole;
   loading: boolean;
-  signIn: (email: string, password: string, role?: UserRole) => Promise<{ error?: string }>;
-  signUp: (email: string, password: string, role: UserRole, meta?: Record<string, any>) => Promise<{ error?: string }>;
+  isEmailUnverified: boolean;
+  signIn: (email: string, password: string) => Promise<{ error?: string; unverified?: boolean }>;
+  signUp: (email: string, password: string, role: UserRole, meta?: Record<string, any>) => Promise<{ error?: string; unverified?: boolean }>;
+  signInWithGoogle: (intendedRole?: UserRole) => Promise<{ error?: string }>;
+  linkGoogleAccount: () => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
-  switchRoleDemo: (newRole: UserRole) => void;
+  resetPasswordForEmail: (email: string) => Promise<{ error?: string }>;
+  updatePassword: (newPassword: string) => Promise<{ error?: string }>;
+  resendVerificationEmail: (email: string) => Promise<{ error?: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -27,13 +67,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [recruiterProfile, setRecruiterProfile] = useState<RecruiterProfile | null>(null);
   const [role, setRole] = useState<UserRole>("student");
   const [loading, setLoading] = useState(true);
+  const [isEmailUnverified, setIsEmailUnverified] = useState(false);
 
+  /**
+   * Refreshes profile state directly from authoritative database records.
+   * Never relies on frontend or session assumptions.
+   */
   const refreshProfile = async () => {
+    if (!user) return;
     try {
-      if (role === "student") {
-        const p = await getCurrentProfile(user?.id);
+      // 1. Authoritative role check from public.profiles
+      const authoritativeRole = await getUserRole(user.id);
+      if (authoritativeRole) {
+        setRole(authoritativeRole);
+      }
+
+      const activeRole = authoritativeRole || role;
+      if (activeRole === "student") {
+        const p = await getCurrentProfile(user.id);
         setStudentProfile(p);
-      } else if (role === "recruiter" && user?.id) {
+        setRecruiterProfile(null);
+      } else if (activeRole === "recruiter") {
         if (isSupabaseConfigured()) {
           const { data } = await supabase
             .from("recruiter_profiles")
@@ -41,94 +95,107 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .eq("user_id", user.id)
             .maybeSingle();
           setRecruiterProfile(data);
+          setStudentProfile(null);
         }
       }
     } catch (err) {
-      console.warn("Failed to refresh profile", err);
+      console.warn("Failed to refresh profile:", err);
     }
   };
 
+  // Auth lifecycle initialization
   useEffect(() => {
     let mounted = true;
 
     async function initializeAuth() {
-      if (isSupabaseConfigured()) {
-        try {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (mounted && session) {
-            setSession(session);
-            setUser(session.user);
-            const userRole = (session.user.user_metadata?.role as UserRole) || "student";
-            setRole(userRole);
-            if (userRole === "student") {
-              const p = await getCurrentProfile(session.user.id);
-              setStudentProfile(p);
-            } else if (userRole === "recruiter") {
-              const { data: rec } = await supabase
-                .from("recruiter_profiles")
-                .select("*")
-                .eq("user_id", session.user.id)
-                .maybeSingle();
-              setRecruiterProfile(rec);
-            }
-          }
-        } catch (err) {
-          console.warn("Supabase auth session fetch error:", err);
-        }
-      } else {
-        // Local mode initialization
-        const savedRole = (localStorage.getItem("sp_role") as UserRole) || "student";
-        const savedAuth = localStorage.getItem("sp_auth_user");
-        if (savedAuth) {
-          try {
-            const parsed = JSON.parse(savedAuth);
-            setUser(parsed);
-          } catch {}
-        }
-        setRole(savedRole);
-        const p = await getCurrentProfile();
-        setStudentProfile(p);
-        if (savedRole === "recruiter") {
-          setRecruiterProfile({
-            id: "recruiter-demo-1",
-            user_id: "user-recruiter",
-            full_name: "Priya Nair",
-            company: "Razorpay",
-            work_email: "priya@razorpay.com",
-            role_title: "Technical Recruiter",
-          });
-        }
+      if (!isSupabaseConfigured()) {
+        if (mounted) setLoading(false);
+        return;
       }
 
-      if (mounted) setLoading(false);
+      try {
+        const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+        if (sessionErr) throw sessionErr;
+
+        if (mounted && session?.user) {
+          setSession(session);
+          setUser(session.user);
+
+          // Check email confirmation status
+          if (session.user.confirmed_at || session.user.email_confirmed_at) {
+            setIsEmailUnverified(false);
+          }
+
+          // Authoritative role check from database
+          const authoritativeRole = await getUserRole(session.user.id);
+          const resolvedRole = authoritativeRole || (session.user.user_metadata?.role as UserRole) || "student";
+          setRole(resolvedRole);
+
+          if (resolvedRole === "student") {
+            const p = await getCurrentProfile(session.user.id);
+            if (mounted) setStudentProfile(p);
+          } else if (resolvedRole === "recruiter") {
+            const { data: rec } = await supabase
+              .from("recruiter_profiles")
+              .select("*")
+              .eq("user_id", session.user.id)
+              .maybeSingle();
+            if (mounted) setRecruiterProfile(rec);
+          }
+        }
+      } catch (err) {
+        console.warn("Supabase auth session fetch error:", err);
+      } finally {
+        if (mounted) setLoading(false);
+      }
     }
 
     initializeAuth();
 
+    // Listen to real Supabase Auth events
     let subscription: { unsubscribe: () => void } | null = null;
     if (isSupabaseConfigured()) {
-      const { data } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      const { data } = supabase.auth.onAuthStateChange(async (event, newSession) => {
         if (!mounted) return;
+
         setSession(newSession);
         setUser(newSession?.user || null);
-        if (newSession?.user) {
-          const userRole = (newSession.user.user_metadata?.role as UserRole) || "student";
-          setRole(userRole);
-          if (userRole === "student") {
+
+        if (event === "SIGNED_OUT" || !newSession?.user) {
+          setStudentProfile(null);
+          setRecruiterProfile(null);
+          setIsEmailUnverified(false);
+          setRole("student");
+          setLoading(false);
+          return;
+        }
+
+        if (newSession.user) {
+          if (newSession.user.confirmed_at || newSession.user.email_confirmed_at) {
+            setIsEmailUnverified(false);
+          }
+
+          // Authoritative role check from database (NEVER overwrite role for existing users!)
+          const authoritativeRole = await getUserRole(newSession.user.id);
+          const activeRole = authoritativeRole || (newSession.user.user_metadata?.role as UserRole) || "student";
+          setRole(activeRole);
+
+          if (activeRole === "student") {
             const p = await getCurrentProfile(newSession.user.id);
-            setStudentProfile(p);
-          } else if (userRole === "recruiter") {
+            if (mounted) setStudentProfile(p);
+            if (mounted) setRecruiterProfile(null);
+          } else if (activeRole === "recruiter") {
             const { data: rec } = await supabase
               .from("recruiter_profiles")
               .select("*")
               .eq("user_id", newSession.user.id)
               .maybeSingle();
-            setRecruiterProfile(rec);
+            if (mounted) setRecruiterProfile(rec);
+            if (mounted) setStudentProfile(null);
           }
-        } else {
-          setStudentProfile(null);
-          setRecruiterProfile(null);
         }
+
+        setLoading(false);
       });
       subscription = data.subscription;
     }
@@ -139,112 +206,266 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const signIn = async (email: string, password: string, selectedRole: UserRole = "student") => {
+  /**
+   * Real Supabase email/password login.
+   */
+  const signIn = async (email: string, password: string): Promise<{ error?: string; unverified?: boolean }> => {
     setLoading(true);
     try {
-      if (isSupabaseConfigured()) {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) return { error: error.message };
+      if (!isSupabaseConfigured()) {
+        return { error: "Supabase client not configured in environment." };
+      }
 
-        const userRole = (data.user.user_metadata?.role as UserRole) || selectedRole;
-        setRole(userRole);
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        const isUnconfirmed = error.message.toLowerCase().includes("email not confirmed");
+        if (isUnconfirmed) {
+          setIsEmailUnverified(true);
+          return { error: formatAuthError(error), unverified: true };
+        }
+        return { error: formatAuthError(error) };
+      }
+
+      if (data.user) {
         setUser(data.user);
         setSession(data.session);
-        if (userRole === "student") {
+        setIsEmailUnverified(false);
+
+        // Fetch authoritative role from database
+        const authoritativeRole = await getUserRole(data.user.id);
+        const resolvedRole = authoritativeRole || (data.user.user_metadata?.role as UserRole) || "student";
+        setRole(resolvedRole);
+
+        if (resolvedRole === "student") {
           const p = await getCurrentProfile(data.user.id);
           setStudentProfile(p);
-        } else if (userRole === "recruiter") {
+          setRecruiterProfile(null);
+        } else if (resolvedRole === "recruiter") {
           const { data: rec } = await supabase
             .from("recruiter_profiles")
             .select("*")
             .eq("user_id", data.user.id)
             .maybeSingle();
           setRecruiterProfile(rec);
+          setStudentProfile(null);
         }
-        return {};
       }
 
-      // Local mock login fallback
-      const mockUser: any = {
-        id: "user-1",
-        email,
-        user_metadata: { role: selectedRole, full_name: email.split("@")[0] },
-      };
-      setUser(mockUser);
-      setRole(selectedRole);
-      localStorage.setItem("sp_role", selectedRole);
-      localStorage.setItem("sp_auth_user", JSON.stringify(mockUser));
-      const p = await getCurrentProfile();
-      setStudentProfile(p);
       return {};
     } catch (err: any) {
-      return { error: err.message || "Failed to sign in" };
+      return { error: formatAuthError(err) };
     } finally {
       setLoading(false);
     }
   };
 
+  /**
+   * Real Supabase email/password signup.
+   * Handles email verification requirement gracefully.
+   */
   const signUp = async (
     email: string,
     password: string,
     selectedRole: UserRole,
     meta?: Record<string, any>
-  ) => {
+  ): Promise<{ error?: string; unverified?: boolean }> => {
     setLoading(true);
     try {
-      if (isSupabaseConfigured()) {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              role: selectedRole,
-              ...meta,
-            },
-          },
-        });
-        if (error) return { error: error.message };
-
-        if (data.user) {
-          setRole(selectedRole);
-          setUser(data.user);
-          setSession(data.session);
-          if (selectedRole === "student") {
-            const p = await getCurrentProfile(data.user.id);
-            setStudentProfile(p);
-          } else if (selectedRole === "recruiter") {
-            const { data: rec } = await supabase
-              .from("recruiter_profiles")
-              .select("*")
-              .eq("user_id", data.user.id)
-              .maybeSingle();
-            setRecruiterProfile(rec);
-          }
-        }
-        return {};
+      if (!isSupabaseConfigured()) {
+        return { error: "Supabase client not configured in environment." };
       }
 
-      // Local mock signup fallback
-      const mockUser: any = {
-        id: `user-${Date.now()}`,
-        email,
-        user_metadata: { role: selectedRole, ...meta },
-      };
-      setUser(mockUser);
-      setRole(selectedRole);
-      localStorage.setItem("sp_role", selectedRole);
-      localStorage.setItem("sp_auth_user", JSON.stringify(mockUser));
-      const p = await getCurrentProfile();
-      setStudentProfile(p);
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: {
+            role: selectedRole,
+            ...meta,
+          },
+          emailRedirectTo: `${window.location.origin}/dashboard`,
+        },
+      });
+
+      if (error) {
+        return { error: formatAuthError(error) };
+      }
+
+      // Check if email confirmation is required by Supabase project settings
+      if (data.user && (!data.session || !data.user.email_confirmed_at)) {
+        setIsEmailUnverified(true);
+        setUser(data.user);
+        return { unverified: true };
+      }
+
+      // If email confirmation is disabled, user is immediately authenticated
+      if (data.user && data.session) {
+        setUser(data.user);
+        setSession(data.session);
+        setIsEmailUnverified(false);
+
+        // Idempotently ensure profile exists with selected role
+        await provisionUserProfile(
+          selectedRole,
+          meta?.full_name,
+          meta?.college,
+          meta?.company
+        );
+
+        setRole(selectedRole);
+        if (selectedRole === "student") {
+          const p = await getCurrentProfile(data.user.id);
+          setStudentProfile(p);
+        }
+      }
+
       return {};
     } catch (err: any) {
-      return { error: err.message || "Failed to create account" };
+      return { error: formatAuthError(err) };
     } finally {
       setLoading(false);
     }
   };
 
-  const signOut = async () => {
+  /**
+   * Initiates real Google OAuth 2.0 via Supabase Google provider.
+   * UX State (intendedRole) is stored in sessionStorage and query params for first-time provisioning.
+   * CRITICAL: An existing user's role in public.profiles is NEVER overwritten.
+   */
+  const signInWithGoogle = async (intendedRole: UserRole = "student"): Promise<{ error?: string }> => {
+    if (!isSupabaseConfigured()) {
+      return { error: "Supabase configuration not found." };
+    }
+
+    try {
+      sessionStorage.setItem("sp_auth_intent_role", intendedRole);
+      const callbackUrl = `${window.location.origin}/auth/callback?role=${intendedRole}`;
+
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: callbackUrl,
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
+      });
+
+      if (error) {
+        return { error: formatAuthError(error) };
+      }
+      return {};
+    } catch (err: any) {
+      return { error: formatAuthError(err) };
+    }
+  };
+
+  /**
+   * Links a Google identity to an existing, already-authenticated user account.
+   * Enforces Rule B: Attaches identity to existing auth.users UUID without creating a second profile.
+   */
+  const linkGoogleAccount = async (): Promise<{ error?: string }> => {
+    if (!isSupabaseConfigured()) {
+      return { error: "Supabase configuration not found." };
+    }
+
+    try {
+      const callbackUrl = `${window.location.origin}/auth/callback?linked=true`;
+      const { error } = await supabase.auth.linkIdentity({
+        provider: "google",
+        options: {
+          redirectTo: callbackUrl,
+        },
+      });
+
+      if (error) {
+        return { error: formatAuthError(error) };
+      }
+      return {};
+    } catch (err: any) {
+      return { error: formatAuthError(err) };
+    }
+  };
+
+  /**
+   * Real Supabase password reset request email.
+   */
+  const resetPasswordForEmail = async (email: string): Promise<{ error?: string }> => {
+    if (!isSupabaseConfigured()) {
+      return { error: "Supabase client not configured in environment." };
+    }
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+
+      if (error) {
+        return { error: formatAuthError(error) };
+      }
+      return {};
+    } catch (err: any) {
+      return { error: formatAuthError(err) };
+    }
+  };
+
+  /**
+   * Real Supabase password update using recovery session.
+   */
+  const updatePassword = async (newPassword: string): Promise<{ error?: string }> => {
+    if (!isSupabaseConfigured()) {
+      return { error: "Supabase client not configured in environment." };
+    }
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (error) {
+        return { error: formatAuthError(error) };
+      }
+      return {};
+    } catch (err: any) {
+      return { error: formatAuthError(err) };
+    }
+  };
+
+  /**
+   * Resends signup verification email.
+   */
+  const resendVerificationEmail = async (email: string): Promise<{ error?: string }> => {
+    if (!isSupabaseConfigured()) {
+      return { error: "Supabase client not configured in environment." };
+    }
+
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: email.trim(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/dashboard`,
+        },
+      });
+
+      if (error) {
+        return { error: formatAuthError(error) };
+      }
+      return {};
+    } catch (err: any) {
+      return { error: formatAuthError(err) };
+    }
+  };
+
+  /**
+   * Real Supabase sign out and complete local state cleanup.
+   */
+  const signOut = async (): Promise<void> => {
     if (isSupabaseConfigured()) {
       await supabase.auth.signOut();
     }
@@ -252,13 +473,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(null);
     setStudentProfile(null);
     setRecruiterProfile(null);
-    localStorage.removeItem("sp_auth_user");
-    localStorage.removeItem("sp_role");
-  };
-
-  const switchRoleDemo = (newRole: UserRole) => {
-    setRole(newRole);
-    localStorage.setItem("sp_role", newRole);
+    setIsEmailUnverified(false);
+    sessionStorage.removeItem("sp_auth_intent_role");
   };
 
   return (
@@ -270,11 +486,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         recruiterProfile,
         role,
         loading,
+        isEmailUnverified,
         signIn,
         signUp,
+        signInWithGoogle,
+        linkGoogleAccount,
         signOut,
         refreshProfile,
-        switchRoleDemo,
+        resetPasswordForEmail,
+        updatePassword,
+        resendVerificationEmail,
       }}
     >
       {children}
