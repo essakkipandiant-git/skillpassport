@@ -14,22 +14,25 @@ export function formatAuthError(err: any): string {
   const lower = msg.toLowerCase();
 
   if (lower.includes("invalid login credentials") || lower.includes("invalid_grant")) {
-    return "Invalid email or password. Please double-check your credentials.";
+    return "Incorrect email or password.";
   }
-  if (lower.includes("email not confirmed") || lower.includes("email address not verified")) {
-    return "Your email address is not verified yet. Please check your inbox for the confirmation link or request a new one.";
+  if (lower.includes("email not confirmed") || lower.includes("email address not verified") || lower.includes("unconfirmed")) {
+    return "Please verify your email before signing in.";
   }
   if (lower.includes("user already registered") || lower.includes("already registered") || lower.includes("already exists")) {
-    return "An account with this email address already exists. Please sign in with your password, then link additional providers in account settings.";
+    return "An account with this email already exists using password authentication. Sign in with your password first, then connect Google from your account settings.";
+  }
+  if (lower.includes("provider is not enabled") || lower.includes("unsupported provider") || lower.includes("oauth error")) {
+    return "Google sign-in is temporarily unavailable. Please try again later.";
+  }
+  if (lower.includes("fetch failed") || lower.includes("network") || lower.includes("failed to fetch") || lower.includes("connection refused")) {
+    return "Unable to connect. Check your internet connection and try again.";
   }
   if (lower.includes("password should be at least 6 characters") || lower.includes("weak_password")) {
     return "Password must be at least 6 characters long.";
   }
   if (lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("only request this once")) {
     return "Too many attempts. For security purposes, please wait a moment before trying again.";
-  }
-  if (lower.includes("fetch failed") || lower.includes("network") || lower.includes("failed to fetch")) {
-    return "Unable to connect to authentication servers. Please check your internet connection.";
   }
   if (lower.includes("link has expired") || lower.includes("token has expired") || lower.includes("otp_expired")) {
     return "This link has expired or has already been used. Please request a fresh one.";
@@ -343,16 +346,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       sessionStorage.setItem("sp_auth_intent_role", intendedRole);
-      const callbackUrl = `${window.location.origin}/auth/callback?role=${intendedRole}`;
+      const callbackUrl = `${window.location.origin}/auth/callback`;
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
           redirectTo: callbackUrl,
-          queryParams: {
-            access_type: "offline",
-            prompt: "consent",
-          },
         },
       });
 
@@ -375,7 +374,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const callbackUrl = `${window.location.origin}/auth/callback?linked=true`;
+      const callbackUrl = `${window.location.origin}/auth/callback`;
       const { error } = await supabase.auth.linkIdentity({
         provider: "google",
         options: {

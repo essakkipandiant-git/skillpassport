@@ -166,8 +166,7 @@ export async function getUserRole(userId: string): Promise<UserRole | null> {
     }
     return (data?.role as UserRole) || null;
   }
-  const db = getLocalDb();
-  return (localStorage.getItem("sp_role") as UserRole) || "student";
+  return null;
 }
 
 /**

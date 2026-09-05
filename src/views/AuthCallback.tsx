@@ -38,9 +38,44 @@ export default function AuthCallback({ go }: { go: Go }) {
           return;
         }
 
-        // Fetch current session from Supabase
-        const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
-        if (sessionErr) throw sessionErr;
+        // 1. Check for PKCE auth code
+        const code = searchParams.get("code");
+        let session = null;
+        if (code) {
+          try {
+            const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+            if (!error && data.session) {
+              session = data.session;
+            }
+          } catch (e) {
+            console.warn("exchangeCodeForSession fallback to getSession:", e);
+          }
+        }
+
+        // 2. Fetch current session from Supabase
+        if (!session) {
+          const { data: { session: currentSession }, error: sessionErr } = await supabase.auth.getSession();
+          if (sessionErr) throw sessionErr;
+          session = currentSession;
+        }
+
+        // 3. Fallback listener if session is still settling
+        if (!session?.user) {
+          const sessionPromise = new Promise<{ user: any } | null>((resolve) => {
+            const timer = setTimeout(() => resolve(null), 2500);
+            const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+              if (newSession?.user) {
+                clearTimeout(timer);
+                subscription.unsubscribe();
+                resolve(newSession);
+              }
+            });
+          });
+          const waited = await sessionPromise;
+          if (waited && (waited as any).user) {
+            session = waited as any;
+          }
+        }
 
         if (!session?.user) {
           setErrorMsg("Authentication session could not be established. Please try signing in again.");

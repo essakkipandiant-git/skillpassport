@@ -266,10 +266,11 @@ export function SignIn({ go, signup = false }: { go: Go; signup?: boolean }) {
                 </Button>
                 <Button
                   variant="secondary"
-                  className="w-full"
-                  onClick={() => toast("Campus SSO: PES, IIIT-B, NIT-K and 337 campuses supported via institutional registry", "info")}
+                  className="w-full relative flex items-center justify-center gap-2"
+                  onClick={() => toast("College SSO is coming soon for partner universities.", "info")}
                 >
                   <GraduationCap className="h-4 w-4 text-cyan" /> Continue with College SSO
+                  <span className="ml-auto rounded bg-hover px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-ink-4">Soon</span>
                 </Button>
               </div>
 
